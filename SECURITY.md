@@ -37,3 +37,5 @@ When you build a real harness on top:
 - Production system prompts that leak business logic
 - Test fixtures with real customer data
 - Memory snapshots from production runs
+
+If you cannot use GitHub Security Advisories, email **otixecv@gmail.com** with the subject `SECURITY: agent-harness`. Please do not open a public issue for vulnerabilities.
