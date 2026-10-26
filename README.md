@@ -1,159 +1,120 @@
-# agent-harness
+<p align="center">
+  <img src="media/banner.svg" alt="agent-harness — Planner → Workers → Validator, with feedback loops and an escalation flag." width="100%">
+</p>
 
-<div align="center">
+<p align="center">
+  <a href="https://github.com/otixe/agent-harness/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/otixe/agent-harness/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-65d8ba?style=flat-square&labelColor=102127"></a>
+  <img alt="python: 3.10+" src="https://img.shields.io/badge/python-3.10%2B-65d8ba?style=flat-square&labelColor=102127">
+  <img alt="typed: pydantic" src="https://img.shields.io/badge/typed-pydantic-65d8ba?style=flat-square&labelColor=102127">
+</p>
 
-🎭 **Multi-agent orchestration framework**
+**A small, dependency-light skeleton for multi-agent task execution with explicit roles.** One planner decomposes the task, workers execute the steps, and a *separate* validator decides whether the success criteria are met — with a bounded retry loop in between.
 
-*Planner + Workers + Validators · Escalation rules · Bedrock-native*
+## The problem
 
-[![CI](https://github.com/otixe/agent-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/otixe/agent-harness/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+A single agent that plans, executes and grades its own work tends to approve its own mistakes. "Call the model in a loop until it says it's done" has no stopping rule and no independent check. Running several agents without roles just moves the problem around.
 
-</div>
+## The approach
 
----
+Make the roles explicit and give each its own model, prompt and client:
 
-## What this is
+| Role | Responsibility |
+| --- | --- |
+| `Planner` | Decomposes a `Task` into `TaskStep`s, each assigned to a named worker, with `depends_on` links. |
+| `Worker` | Executes one step, receiving the outputs of the steps it depends on as context. |
+| `Validator` | Checks the combined output against the task's `success_criteria`. Can use a *different* model than the workers. |
+| `Harness` | Runs the loop, feeds validator feedback back into the next iteration, stops at `max_iterations`, and reports `escalated=True` when you configured an escalation model and the loop did not converge. |
 
-A small framework for **multi-agent task execution** with explicit roles,
-escalation rules, and validation gates. Designed around lessons learned from
-running real production agent systems where:
-
-- A single mega-agent does everything badly
-- Pure parallel agents lose track of cross-cutting concerns
-- "Just call Claude in a loop" eventually catches fire on long tasks
-
-The pattern: **one Planner, many Workers, one Validator**, with hard rules
-about when to escalate and when to deliver.
-
----
-
-## Architecture
-
-```
-                ┌─────────────────┐
-                │    User task    │
-                └────────┬────────┘
-                         ▼
-                ┌─────────────────┐
-                │    Planner      │  decomposes task into atomic steps
-                │ (Sonnet/Opus)   │  produces a TaskGraph
-                └────────┬────────┘
-                         ▼
-            ┌────────────┴────────────┐
-            ▼                         ▼
-  ┌──────────────────┐      ┌──────────────────┐
-  │    Worker A      │      │    Worker B      │   parallel execution
-  │  (Sonnet/Haiku)  │      │  (Sonnet/Haiku)  │   bounded by graph
-  └────────┬─────────┘      └────────┬─────────┘
-           │                         │
-           └────────────┬────────────┘
-                        ▼
-               ┌─────────────────┐
-               │   Validator     │   checks results vs success criteria
-               │ (different LLM) │   issues escalation if needed
-               └────────┬────────┘
-                        ▼
-        ┌───────────────┴───────────────┐
-        │                               │
-        ▼                               ▼
-   ┌─────────┐                  ┌──────────────┐
-   │ Deliver │                  │  Escalate    │
-   │         │                  │  to Anvil    │
-   │         │                  │  (Opus 4)    │
-   └─────────┘                  └──────────────┘
+```mermaid
+flowchart LR
+  T["Task<br/>criteria + red lines"] --> P[Planner]
+  P -->|steps| W[Workers]
+  W -->|combined output| V[Validator]
+  V -- passed --> OK(["TaskResult · success"])
+  V -- "failed + feedback" --> P
+  V -- "iterations exhausted" --> ES(["TaskResult · escalated"])
 ```
 
-Each box is a **role**, not a single agent. Roles can be backed by different
-Bedrock models, different system prompts, different tool sets — but they
-share a common message bus and task state.
+## See it run
 
----
+The demo uses a scripted client, so it needs no cloud account and no key. The first pass omits a required section; the validator rejects it; the feedback is appended to the task; the second pass passes.
 
-## Why this design
+<p align="center">
+  <img src="media/demo.svg" alt="Terminal capture of examples/offline_demo.py: success after two iterations, not escalated." width="92%">
+</p>
 
-### Hard-learned rules from production
-
-1. **Different models for different roles**
-   - Planner: Sonnet (fast, good reasoning)
-   - Workers: Haiku (cheap, parallelizable)
-   - Validator: a *different* model than the workers (avoids self-confirmation)
-   - Anvil (escalation): Opus (only when complexity demands it)
-
-2. **One Planner per task, not per turn**
-   - Replanning mid-flight = loops and budget overruns
-   - Force replan only on validator-triggered escalation
-
-3. **Validator is non-negotiable**
-   - "It looked good" → ship to prod → 3am pages
-   - Validator runs on a separate context with the success criteria as input
-
-4. **Multi-doc deliverables go in main, not delegated**
-   - A subagent stuck after 40 minutes producing 1/3 docs is a known anti-pattern
-   - Long single-deliverable tasks belong in the orchestrator's main thread
-
-5. **Red lines are explicit, not implied**
-   - Workers cannot touch secrets paths, infra config, CI files unless task-spec'd
-
----
+<sub>Terminal capture of examples/offline_demo.py: success after two iterations, not escalated.</sub>
 
 ## Quickstart
 
-```python
-from agent_harness import Harness, Task, Worker, Planner, Validator
+Python 3.10+. Not on PyPI yet — install from GitHub:
 
-harness = Harness(
-    planner=Planner(model="us.anthropic.claude-sonnet-4-5"),
-    workers=[
-        Worker(name="research", model="us.anthropic.claude-haiku-4-5"),
-        Worker(name="implement", model="us.anthropic.claude-sonnet-4-5"),
-    ],
-    validator=Validator(model="us.anthropic.claude-haiku-4-5"),
-    escalation_model="us.anthropic.claude-opus-4-5",
-    max_iterations=5,
-)
-
-task = Task(
-    description="Audit our 3 firewalls for indirect exposure vectors and produce a report",
-    success_criteria=[
-        "Report covers all 3 firewalls",
-        "Each finding includes severity, policy ID, recommendation",
-        "Output is HTML and JSON",
-    ],
-    red_lines=[
-        "Do not modify any firewall configuration",
-        "Do not access secrets/ paths",
-    ],
-)
-
-result = harness.run(task)
-print(result.report_path)
-print(result.iterations_used)
-print(result.escalated)
+```bash
+pip install "git+https://github.com/otixe/agent-harness.git"
+python examples/offline_demo.py     # after cloning, to see the loop without any model
 ```
 
----
+Plug in your own model client. Anything with a `converse(messages, system_prompt) -> str` method satisfies the `LLMClient` protocol:
 
-## What this is NOT
+```python
+from agent_harness import Harness, Planner, Task, Validator, Worker
 
-- ❌ A general-purpose agent framework (use LangGraph or similar)
-- ❌ A long-running background daemon (use a real workflow engine)
-- ❌ A way to skip thinking about your problem decomposition
+class MyClient:
+    def converse(self, messages, system_prompt=""):
+        ...  # call your provider and return the text of the reply
 
-It's deliberately small and opinionated. ~800 LOC, no LangChain.
+client = MyClient()
+harness = Harness(
+    planner=Planner(model="planner-model", client=client),
+    workers=[Worker(name="research", model="worker-model", client=client)],
+    validator=Validator(model="validator-model", client=client),
+    escalation_model="escalation-model",
+    max_iterations=5,
+)
+result = harness.run(Task(
+    description="Summarise the open incidents and propose next steps",
+    success_criteria=["Every incident has an owner", "Next steps are ordered"],
+    red_lines=["Do not modify infrastructure"],
+))
+print(result.success, result.iterations_used, result.escalated)
+```
 
----
+## Status and honest limits
 
-## Examples
+This is a **reference skeleton**, not a finished framework. Know what is and is not there:
 
-- [`examples/firewall-audit.md`](examples/firewall-audit.md) — multi-firewall audit
-- [`examples/code-review.md`](examples/code-review.md) — automated PR review with escalation
+- Steps run **sequentially**, in the order the planner returns them; `depends_on` decides which outputs a step receives, it does not parallelise.
+- With a client attached, `Planner.plan` and `Validator.validate` send the prompt but do **not** parse the reply yet — the planner returns a single step and the validator returns "validated". Parse your model's structured output there (the hooks are marked in `roles.py`). Without a client, the validator falls back to checking that each criterion appears in the output, which is what the demo and the tests use.
+- `escalation_model` currently only sets `escalated=True` on the result; routing to a stronger model is yours to implement.
+- `red_lines` are passed to the planner as text. They are **not enforced** in code.
+- No Bedrock (or other provider) adapter ships in the package; the `LLMClient` protocol is the integration point.
 
----
+If you need a provider-specific agent loop with tools and memory, see [bedrock-claude-starter](https://github.com/otixe/bedrock-claude-starter).
+
+## Guidance from running agent teams
+
+Not code, but the reasons the roles are split: use a validator that is not the model that produced the work; plan once per task rather than every turn; keep long single deliverables in the orchestrating thread instead of delegating them; write the red lines down. The [platform manual](https://github.com/otixe/plataforma) describes the full working method (separation of powers, proportionate gates, independent QA).
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check src tests && mypy src && pytest
+```
+
+## Part of the Otixe agent platform
+
+Otixe builds persistent, accountable agent teams: **Pi** (runtime) → **Oficinas** (persistent teams) ↔ **Cerebro** (shared memory and work state) ↔ **Sinapsis** (web control surface), with **AMA** connecting the runtime to Cerebro.
+
+This library is a compact, standalone illustration of the platform's working method: separate execution from validation, bound the loop, keep the evidence.
+
+[Otixe profile](https://github.com/otixe) · [Platform manual](https://github.com/otixe/plataforma) · [pi-oficinas](https://github.com/otixe/pi-oficinas)
+
+## Validation
+
+See [VALIDATION.md](VALIDATION.md) for the local Python matrix, reproducible checks and unproven integration boundaries. GitHub Actions has not been run by this delivery.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-Built by [@otixe](https://github.com/otixe) — DevOps & Agentic Systems Engineer · 🇨🇱

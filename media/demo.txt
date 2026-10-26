@@ -1,0 +1,7 @@
+$ python examples/offline_demo.py
+success=True iterations=2 escalated=False
+validator: auto-validation (no LLM client provided)
+--- output ---
+## step-1
+Summary of the change.
+Rollback plan: revert the release tag.

@@ -7,15 +7,13 @@ name = "agent-harness"
 version = "0.1.0"
 description = "Multi-agent orchestration framework with planner, workers, validator, and escalation rules"
 readme = "README.md"
-license = { file = "LICENSE" }
-authors = [{ name = "Otixe Cifuentes", email = "https://github.com/otixe" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Otixe Cifuentes" }]
 keywords = ["agent", "multi-agent", "llm", "claude", "bedrock", "orchestration"]
 requires-python = ">=3.10"
 dependencies = [
-    "boto3>=1.34",
     "pydantic>=2.5",
-    "tenacity>=8.0",
-    "rich>=13.0",
 ]
 
 [project.optional-dependencies]

@@ -1,6 +1,10 @@
 # Security
 
-📧 Issues: `https://github.com/otixe` with subject `[SECURITY]`.
+## Reporting a vulnerability
+
+Please use [Report a vulnerability](https://github.com/otixe/agent-harness/security/advisories/new) (GitHub Security Advisories).
+Do not post tokens, credentials, private configuration or personal data in public issues.
+If private reporting is not enabled, request that the maintainer enables it without disclosing vulnerability details.
 
 ## What this framework does NOT touch
 
